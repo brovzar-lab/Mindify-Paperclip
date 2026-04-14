@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function onlyChangedFields(allowed) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowed);
+    }
+
+    // Users own their profile doc; nobody else can read or write it.
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // Recordings: only Cloud Functions create/update; users can read their own.
+    match /recordings/{recordingId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    // Items: Cloud Functions create; users can read their own, mark them
+    // complete (set completedAt) or snooze (change bucket), and delete.
+    // Classification fields are immutable from the client.
+    match /items/{itemId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if false;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && onlyChangedFields(['completedAt', 'bucket']);
+    }
+
+    // Groups: Cloud Functions create; users can read their own, rename, or delete.
+    match /groups/{groupId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if false;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && onlyChangedFields(['title']);
+    }
+  }
+}

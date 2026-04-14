@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Mindify",
+    "slug": "mindify",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "mindify",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.mindify.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Mindify records your voice to capture tasks and ideas."
+      }
+    },
+    "android": {
+      "package": "com.mindify.app",
+      "permissions": ["RECORD_AUDIO"]
+    },
+    "plugins": [
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Mindify records your voice to capture tasks and ideas."
+        }
+      ]
+    ]
+  }
+}

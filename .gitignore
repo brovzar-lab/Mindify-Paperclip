@@ -1,0 +1,26 @@
+node_modules/
+.env
+.env.local
+*.log
+.DS_Store
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# Native build artifacts (managed workflow generates on demand)
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+google-services.json
+GoogleService-Info.plist
+
+# Firebase
+.firebaserc
+firebase-debug.log
+ui-debug.log
+functions/lib/
