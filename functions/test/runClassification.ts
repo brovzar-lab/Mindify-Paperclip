@@ -9,24 +9,22 @@
  * Usage (from functions/):
  *   ANTHROPIC_API_KEY=sk-ant-... npx tsx test/runClassification.ts
  */
+import Anthropic from '@anthropic-ai/sdk';
 import { classifyTranscript } from '../src/claude';
 import { estimateClaudeCostCents } from '../src/metrics';
 import { FIXTURES, type ClassificationFixture, type ExpectedItem } from './fixtures';
 import type { ClassifiedItem } from '../src/types';
 
-// The real Cloud Function pulls secrets from Firebase Secret Manager via
-// defineSecret(). This runner is for local dev, so it reads from the env
-// directly and monkey-patches the defineSecret shim so imports don't throw.
-process.env.ANTHROPIC_API_KEY ??= '';
-if (!process.env.ANTHROPIC_API_KEY) {
+const apiKey = process.env.ANTHROPIC_API_KEY;
+if (!apiKey) {
   console.error(
     'ANTHROPIC_API_KEY is required. Export it before running the harness.',
   );
   process.exit(1);
 }
-// config.ts reads the secret via ANTHROPIC_API_KEY.value(). defineSecret()
-// returns something with .value(); in dev mode without the functions
-// emulator it reads from process.env automatically.
+// Build our own client and thread it into classifyTranscript so we never
+// go through defineSecret() in a non-Firebase context.
+const anthropic = new Anthropic({ apiKey });
 
 interface FieldMatch {
   type: boolean;
@@ -35,6 +33,14 @@ interface FieldMatch {
   bucket: boolean;
   title: boolean;
 }
+
+const MATCH_FIELDS: readonly (keyof FieldMatch)[] = [
+  'type',
+  'category',
+  'urgency',
+  'bucket',
+  'title',
+] as const;
 
 function matchItem(expected: ExpectedItem, actual: ClassifiedItem): FieldMatch {
   return {
@@ -46,37 +52,97 @@ function matchItem(expected: ExpectedItem, actual: ClassifiedItem): FieldMatch {
   };
 }
 
-function scoreFixture(fixture: ClassificationFixture, actual: ClassifiedItem[]): {
-  countMatch: boolean;
-  itemMatches: FieldMatch[];
-  perFieldAccuracy: Record<keyof FieldMatch, number>;
-} {
-  const countMatch = fixture.expected.length === actual.length;
-  const itemMatches: FieldMatch[] = [];
+function matchScore(m: FieldMatch): number {
+  return MATCH_FIELDS.filter((k) => m[k]).length;
+}
 
-  // Greedy alignment by expected order. Good enough for the fixture set;
-  // swap to Hungarian matching if false-positives from ordering start
-  // dominating the noise.
-  for (let i = 0; i < Math.min(fixture.expected.length, actual.length); i++) {
-    itemMatches.push(matchItem(fixture.expected[i], actual[i]));
+/**
+ * Optimal bipartite matching: for each permutation of actuals, score
+ * against expected. Keep the permutation that maximises total match
+ * score. Exhaustive — fine up to ~8 items per fixture (8! = 40320);
+ * above that, fall back to greedy best-match.
+ */
+function bestAlignment(
+  expected: ExpectedItem[],
+  actual: ClassifiedItem[],
+): FieldMatch[] {
+  const pairCount = Math.min(expected.length, actual.length);
+  if (pairCount === 0) return [];
+
+  if (actual.length <= 8) {
+    let best: FieldMatch[] = [];
+    let bestScore = -1;
+    const indices = actual.map((_, i) => i);
+
+    const tryPerm = (perm: number[]) => {
+      const matches: FieldMatch[] = [];
+      let score = 0;
+      for (let i = 0; i < pairCount; i++) {
+        const m = matchItem(expected[i], actual[perm[i]]);
+        matches.push(m);
+        score += matchScore(m);
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = matches;
+      }
+    };
+
+    const permute = (arr: number[], k: number) => {
+      if (k === arr.length - 1) {
+        tryPerm(arr);
+        return;
+      }
+      for (let i = k; i < arr.length; i++) {
+        [arr[k], arr[i]] = [arr[i], arr[k]];
+        permute(arr, k + 1);
+        [arr[k], arr[i]] = [arr[i], arr[k]];
+      }
+    };
+    permute(indices, 0);
+    return best;
   }
+
+  // Greedy fallback for large arrays.
+  const used = new Set<number>();
+  const matches: FieldMatch[] = [];
+  for (const exp of expected) {
+    let bestJ = -1;
+    let bestS = -1;
+    for (let j = 0; j < actual.length; j++) {
+      if (used.has(j)) continue;
+      const m = matchItem(exp, actual[j]);
+      const s = matchScore(m);
+      if (s > bestS) {
+        bestS = s;
+        bestJ = j;
+      }
+    }
+    if (bestJ < 0) break;
+    used.add(bestJ);
+    matches.push(matchItem(exp, actual[bestJ]));
+  }
+  return matches;
+}
+
+function scoreFixture(fixture: ClassificationFixture, actual: ClassifiedItem[]) {
+  const countMatch = fixture.expected.length === actual.length;
+  const itemMatches = bestAlignment(fixture.expected, actual);
 
   const accumulate = (key: keyof FieldMatch) =>
     itemMatches.length === 0
       ? 1 // vacuously correct when both expected and actual are empty
       : itemMatches.filter((m) => m[key]).length / itemMatches.length;
 
-  return {
-    countMatch,
-    itemMatches,
-    perFieldAccuracy: {
-      type: accumulate('type'),
-      category: accumulate('category'),
-      urgency: accumulate('urgency'),
-      bucket: accumulate('bucket'),
-      title: accumulate('title'),
-    },
+  const perFieldAccuracy: Record<keyof FieldMatch, number> = {
+    type: accumulate('type'),
+    category: accumulate('category'),
+    urgency: accumulate('urgency'),
+    bucket: accumulate('bucket'),
+    title: accumulate('title'),
   };
+
+  return { countMatch, itemMatches, perFieldAccuracy };
 }
 
 async function main() {
@@ -99,14 +165,14 @@ async function main() {
 
   for (const fixture of FIXTURES) {
     const startedAt = Date.now();
-    const result = await classifyTranscript(fixture.transcript);
+    const result = await classifyTranscript(fixture.transcript, anthropic);
     const elapsedMs = Date.now() - startedAt;
     totalElapsedMs += elapsedMs;
 
     const score = scoreFixture(fixture, result.items);
 
     if (score.countMatch) countMatches++;
-    for (const key of Object.keys(fieldAccuracies) as (keyof FieldMatch)[]) {
+    for (const key of MATCH_FIELDS) {
       fieldAccuracies[key].push(score.perFieldAccuracy[key]);
     }
 
@@ -125,13 +191,10 @@ async function main() {
         const m = score.itemMatches[i];
         const e = fixture.expected[i];
         const a = result.items[i];
-        const flags = [
-          m.type ? '' : `type(${a.type}≠${e.type})`,
-          m.category ? '' : `cat(${a.category}≠${e.category})`,
-          m.urgency ? '' : `urg(${a.urgency}≠${e.urgency})`,
-          m.bucket ? '' : `buck(${a.bucket}≠${e.bucket})`,
-          m.title ? '' : `title("${a.title}"!~"${e.titleIncludes}")`,
-        ].filter(Boolean).join(' ');
+        const flags = MATCH_FIELDS.filter((k) => !m[k]).map((k) => {
+          if (k === 'title') return `title("${a.title}"!~"${e.titleIncludes}")`;
+          return `${k}(${a[k]}≠${e[k]})`;
+        }).join(' ');
         if (flags) console.log(`    #${i}: ${flags}`);
       }
     }
@@ -139,7 +202,8 @@ async function main() {
 
   const mean = (xs: number[]) => xs.reduce((s, v) => s + v, 0) / (xs.length || 1);
   const cacheReadShare =
-    totalCacheReadTokens / (totalCacheReadTokens + totalCacheWriteTokens + totalInputTokens || 1);
+    totalCacheReadTokens /
+    (totalCacheReadTokens + totalCacheWriteTokens + totalInputTokens || 1);
 
   console.log('\n=== Aggregate ===');
   console.log(`Fixtures:               ${FIXTURES.length}`);
@@ -164,7 +228,8 @@ async function main() {
     console.log(
       '  Likely cause: system prompt is under Haiku 4.5 minimum cacheable prefix (4096 tokens).',
     );
-    console.log('  Fix: expand src/prompts/classification.ts until we clear the floor.');
+    console.log('  Fix: expand src/prompts/classification.ts, then verify with');
+    console.log('       `npm run count:prompt`.');
   }
 }
 

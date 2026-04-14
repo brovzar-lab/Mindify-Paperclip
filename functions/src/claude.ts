@@ -52,10 +52,17 @@ export interface ClassifyResult {
   };
 }
 
-let _client: Anthropic | null = null;
-function client(): Anthropic {
-  if (!_client) _client = new Anthropic({ apiKey: ANTHROPIC_API_KEY.value() });
-  return _client;
+// Default client uses the defineSecret-backed key (the path the Cloud
+// Function runs through). Test runners and benchmarks can pass their own
+// pre-configured `Anthropic` instance to classifyTranscript and skip
+// SecretParam.value() entirely — avoids the "does defineSecret fall back
+// to process.env in every SDK version" footgun.
+let _defaultClient: Anthropic | null = null;
+function defaultClient(): Anthropic {
+  if (!_defaultClient) {
+    _defaultClient = new Anthropic({ apiKey: ANTHROPIC_API_KEY.value() });
+  }
+  return _defaultClient;
 }
 
 /**
@@ -67,11 +74,17 @@ function client(): Anthropic {
  * - Uses `output_config.format` structured outputs so we get guaranteed
  *   valid JSON matching the schema; we still JSON.parse the first text
  *   block because `messages.create` returns the raw text.
+ *
+ * @param transcript        The Whisper output to classify.
+ * @param anthropicClient   Optional override; omit in production so the
+ *                          function reads its secret from Firebase.
  */
 export async function classifyTranscript(
   transcript: string,
+  anthropicClient?: Anthropic,
 ): Promise<ClassifyResult> {
-  const response = await client().messages.create({
+  const anthropic = anthropicClient ?? defaultClient();
+  const response = await anthropic.messages.create({
     model: CLAUDE_MODEL,
     max_tokens: 4096,
     system: [
