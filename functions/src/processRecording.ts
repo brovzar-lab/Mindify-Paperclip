@@ -13,10 +13,11 @@ import { proposeGroups } from './grouping';
 import { checkAndIncrement, MAX_RECORDINGS_PER_HOUR } from './rateLimiter';
 import { logRecordingCost } from './metrics';
 
-// Storage objects land at audio/{userId}/{recordingId}. The extension (.m4a,
-// .webm, .wav) is part of the recordingId segment so filename-based MIME
-// detection still works on the Whisper call.
-const AUDIO_PATH_PATTERN = /^audio\/([^/]+)\/([^/]+)$/;
+// Storage objects land at audio/{userId}/{recordingId}.{ext}. The extension
+// is captured but discarded so the recordingId stays clean for use as a
+// Firestore doc id; the original filename (with extension) is reconstructed
+// when calling Whisper so its MIME detection still works.
+const AUDIO_PATH_PATTERN = /^audio\/([^/]+)\/([^/]+)\.(m4a|mp3|wav|webm|ogg)$/;
 
 /**
  * Storage-triggered pipeline:

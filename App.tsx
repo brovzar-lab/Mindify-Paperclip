@@ -1,32 +1,39 @@
+import 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import {
+  DefaultTheme,
+  NavigationContainer,
+} from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { AuthGate } from '@/components/AuthGate';
+import { RootStack } from '@/navigation/RootStack';
+import { theme } from '@/theme';
 
-// WS2 placeholder — WS3 replaces with the Home/Brain/Detail navigation tree.
+const navTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    primary: theme.colors.accent,
+    background: theme.colors.background,
+    card: theme.colors.surface,
+    text: theme.colors.text,
+    border: theme.colors.divider,
+    notification: theme.colors.urgencyHigh,
+  },
+};
+
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Mindify</Text>
-      <Text style={styles.subtitle}>Voice in. Organized out.</Text>
-      <StatusBar style="auto" />
-    </View>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <NavigationContainer theme={navTheme}>
+          <AuthGate>
+            <RootStack />
+          </AuthGate>
+        </NavigationContainer>
+        <StatusBar style="dark" />
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#faf8f4',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#6b6b6b',
-  },
-});
