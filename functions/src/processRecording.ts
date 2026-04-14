@@ -10,6 +10,8 @@ import {
 import { transcribeAudio } from './whisper';
 import { classifyTranscript } from './claude';
 import { proposeGroups } from './grouping';
+import { checkAndIncrement, MAX_RECORDINGS_PER_HOUR } from './rateLimiter';
+import { logRecordingCost } from './metrics';
 
 // Storage objects land at audio/{userId}/{recordingId}. The extension (.m4a,
 // .webm, .wav) is part of the recordingId segment so filename-based MIME
@@ -18,8 +20,9 @@ const AUDIO_PATH_PATTERN = /^audio\/([^/]+)\/([^/]+)$/;
 
 /**
  * Storage-triggered pipeline:
- *   Storage upload → Whisper transcription → Claude classification →
- *   smart grouping → atomic Firestore write (recording, items, groups).
+ *   Storage upload → rate-limit gate → Whisper transcription →
+ *   Claude classification → smart grouping → atomic Firestore write
+ *   (recording, items, groups) → cost log.
  *
  * The final Firestore write is a single batch so the client's real-time
  * listener sees all items (and their group assignments) appear together.
@@ -49,6 +52,27 @@ export const processRecording = onObjectFinalized(
 
     const firestore = getFirestore();
     const recordingRef = firestore.collection('recordings').doc(recordingId);
+
+    // 0. Rate-limit gate. If the user has hammered the pipeline, persist an
+    //    audit trail on the recording and short-circuit before spending
+    //    Whisper/Claude tokens.
+    const decision = await checkAndIncrement(userId);
+    if (!decision.allowed) {
+      logger.warn('Rate limit exceeded', { userId, recordingId, decision });
+      await recordingRef.set(
+        {
+          userId,
+          audioUrl: `gs://${event.data.bucket}/${objectName}`,
+          rateLimited: true,
+          rateLimitResetAt: new Date(decision.resetAtMs).toISOString(),
+          rateLimitCap: MAX_RECORDINGS_PER_HOUR,
+          createdAt: FieldValue.serverTimestamp(),
+          processedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      return;
+    }
 
     // 1. Download the audio bytes from Storage.
     const bucket = getStorage().bucket(event.data.bucket);
@@ -140,13 +164,32 @@ export const processRecording = onObjectFinalized(
     await batch.commit();
 
     const elapsedMs = Date.now() - startedAt;
+    const overBudget = elapsedMs > LATENCY_BUDGET_MS;
     logger.info('Recording processed', {
       recordingId,
       elapsedMs,
       budgetMs: LATENCY_BUDGET_MS,
-      overBudget: elapsedMs > LATENCY_BUDGET_MS,
+      overBudget,
       itemCount: items.length,
       groupCount: groups.length,
     });
+
+    // 6. Log per-recording cost to Firestore. Non-fatal if it fails —
+    //    don't want metrics to break the user flow.
+    try {
+      await logRecordingCost({
+        userId,
+        recordingId,
+        audioByteLength: audioBytes.length,
+        classificationUsage: usage,
+        elapsedMs,
+        overBudget,
+      });
+    } catch (err) {
+      logger.error('Failed to log recording cost', {
+        recordingId,
+        error: (err as Error).message,
+      });
+    }
   },
 );

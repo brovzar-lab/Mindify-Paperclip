@@ -47,5 +47,16 @@ service cloud.firestore {
         && resource.data.userId == request.auth.uid
         && onlyChangedFields(['title']);
     }
+
+    // Per-recording cost ledger written by processRecording. Clients never
+    // need these — cost dashboards run server-side against the Admin SDK.
+    match /costs/{userId}/{month}/{recordingId} {
+      allow read, write: if false;
+    }
+
+    // Per-user rate-limit counter. Server-only.
+    match /rateLimit/{userId} {
+      allow read, write: if false;
+    }
   }
 }
