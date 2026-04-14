@@ -66,12 +66,12 @@ userId, title, category, itemIds[], createdAt
 | Decision | Choice | Rationale |
 |---|---|---|
 | Transcription | OpenAI Whisper API | Best accuracy, handles natural/ADHD speech |
-| AI Classification | Claude API (claude-haiku-4-5) | Fast, cost-efficient, structured JSON output |
+| AI Classification | Claude API — model `claude-haiku-4-5-20251001` (pinned snapshot of Haiku 4.5) | Fast, cost-efficient, structured JSON output; dated snapshot avoids alias drift between environments |
 | Mobile Framework | React Native + Expo (managed workflow) | Cross-platform, fast iteration |
 | Backend | Firebase (Firestore, Auth, Storage, Functions) | Real-time listeners, easy scaling |
 | Audio | expo-av | Expo-native, well-supported |
 | Local State | Zustand | Lightweight, minimal boilerplate |
-| Auth | Anonymous first, upgrade to Apple/Google | Zero-friction onboarding |
+| Auth | Anonymous-only for MVP (Apple/Google deferred) | Zero-friction onboarding; revisit social-auth upgrade path post-MVP |
 
 ---
 
@@ -106,6 +106,7 @@ userId, title, category, itemIds[], createdAt
 - Test harness: diverse voice input samples → validate classification accuracy
 - Edge cases: multiple items in one recording, ambiguous phrasing, background noise
 - Latency budget: target < 8s end-to-end (record stop → items appear)
+  - **Early benchmark required:** measure cold-start Cloud Function + Whisper + Claude + Firestore write against the 8s budget in WS4's first week; escalate architecture changes (e.g. min-instances, streaming transcription) if the budget is not achievable
 - Cost monitoring and rate limiting
 
 ---
@@ -121,7 +122,7 @@ userId, title, category, itemIds[], createdAt
 **Out of scope (v2):**
 - Lock screen widget
 - Offline queue
-- Social auth
+- Social auth (Apple / Google — **explicitly deferred**; revisit post-MVP)
 - Push notifications
 - Sharing / collaboration
 
