@@ -16,7 +16,9 @@
     },
     "android": {
       "package": "com.mindify.app",
-      "permissions": ["RECORD_AUDIO"]
+      "permissions": [
+        "RECORD_AUDIO"
+      ]
     },
     "plugins": [
       [
@@ -24,7 +26,8 @@
         {
           "microphonePermission": "Mindify records your voice to capture tasks and ideas."
         }
-      ]
+      ],
+      "expo-asset"
     ]
   }
 }
