@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Audio } from 'expo-av';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  useAudioRecorder,
+  useAudioRecorderState,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  RecordingPresets,
+} from 'expo-audio';
 import { ref as storageRef, uploadBytes } from 'firebase/storage';
 import { auth, storage } from '@/lib/firebase';
 
@@ -20,49 +26,43 @@ const INITIAL_STATE: RecordingState = {
   error: null,
 };
 
-/**
- * Drives the recording UI: permission, start/stop, metering for the
- * waveform, and Storage upload that fires the processRecording Cloud
- * Function. Returns the new recordingId on a successful upload — the
- * caller stashes it in app state so the home screen can show
- * "X items captured" once Firestore reflects the pipeline output.
- *
- * Storage path: audio/{userId}/{recordingId}.m4a
- */
 export function useRecording() {
-  const recordingRef = useRef<Audio.Recording | null>(null);
+  const recorder = useAudioRecorder(
+    { ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true },
+    (status) => {
+      if (status.hasError) {
+        setState((s) => ({ ...s, error: status.error }));
+      }
+    },
+  );
+  const recorderState = useAudioRecorderState(recorder, 80);
   const [state, setState] = useState<RecordingState>(INITIAL_STATE);
+
+  useEffect(() => {
+    if (recorderState.isRecording) {
+      setState((s) => ({
+        ...s,
+        isRecording: true,
+        meterDb: recorderState.metering ?? -160,
+        elapsedMs: recorderState.durationMillis,
+      }));
+    }
+  }, [recorderState]);
 
   const start = useCallback(async () => {
     setState((s) => ({ ...s, error: null }));
     try {
-      const perm = await Audio.requestPermissionsAsync();
+      const perm = await requestRecordingPermissionsAsync();
       if (!perm.granted) {
         setState((s) => ({ ...s, error: 'Microphone permission denied.' }));
         return;
       }
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
-
-      const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
-      recording.setProgressUpdateInterval(80);
-      recording.setOnRecordingStatusUpdate((status) => {
-        if (status.isRecording) {
-          setState((s) => ({
-            ...s,
-            isRecording: true,
-            meterDb: status.metering ?? -160,
-            elapsedMs: status.durationMillis,
-          }));
-        }
-      });
-      await recording.startAsync();
-      recordingRef.current = recording;
+      await recorder.prepareToRecordAsync();
+      recorder.record();
     } catch (err) {
       setState((s) => ({
         ...s,
@@ -70,11 +70,9 @@ export function useRecording() {
         error: (err as Error).message,
       }));
     }
-  }, []);
+  }, [recorder]);
 
   const stopAndUpload = useCallback(async (): Promise<string | null> => {
-    const recording = recordingRef.current;
-    if (!recording) return null;
     const userId = auth.currentUser?.uid;
     if (!userId) {
       setState((s) => ({ ...s, error: 'Not signed in.' }));
@@ -83,9 +81,8 @@ export function useRecording() {
 
     setState((s) => ({ ...s, isRecording: false, isUploading: true }));
     try {
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      recordingRef.current = null;
+      await recorder.stop();
+      const uri = recorder.uri;
       if (!uri) {
         setState((s) => ({
           ...s,
@@ -95,10 +92,6 @@ export function useRecording() {
         return null;
       }
 
-      // Recording id: rough sortable + unique enough for MVP. The Cloud
-      // Function strips the extension when it parses the path so this
-      // becomes the Firestore doc id for both the recording and its items'
-      // recordingId field.
       const recordingId = `${Date.now()}-${Math.random()
         .toString(36)
         .slice(2, 8)}`;
@@ -118,15 +111,7 @@ export function useRecording() {
       }));
       return null;
     }
-  }, []);
-
-  // Make sure we don't leak an in-flight recording if the screen unmounts
-  // mid-capture (e.g., user backgrounds the app and we get torn down).
-  useEffect(() => {
-    return () => {
-      recordingRef.current?.stopAndUnloadAsync().catch(() => undefined);
-    };
-  }, []);
+  }, [recorder]);
 
   return { ...state, start, stopAndUpload };
 }

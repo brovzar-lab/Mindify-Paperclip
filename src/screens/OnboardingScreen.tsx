@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Audio } from 'expo-av';
+import { requestRecordingPermissionsAsync } from 'expo-audio';
 import { ScreenContainer } from '@/components/ScreenContainer';
 import { theme } from '@/theme';
 import type { ScreenProps } from '@/navigation/types';
@@ -18,7 +18,7 @@ export function OnboardingScreen() {
     setRequesting(true);
     setDenied(false);
     try {
-      const perm = await Audio.requestPermissionsAsync();
+      const perm = await requestRecordingPermissionsAsync();
       if (!perm.granted) {
         setDenied(true);
         return;
