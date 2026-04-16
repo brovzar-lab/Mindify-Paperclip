@@ -14,7 +14,8 @@
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
     "test:classify": "tsx test/runClassification.ts",
-    "count:prompt": "tsx scripts/countPromptTokens.ts"
+    "count:prompt": "tsx scripts/countPromptTokens.ts",
+    "seed:demo": "tsx scripts/seedDemo.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
