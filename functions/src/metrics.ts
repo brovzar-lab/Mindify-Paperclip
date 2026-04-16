@@ -73,7 +73,7 @@ export async function logRecordingCost(params: {
       claudeCents,
       totalCents: whisperCents + claudeCents,
       classificationUsage: params.classificationUsage,
-      elapsedMs,
+      elapsedMs: params.elapsedMs,
       overBudget: params.overBudget,
       timestamp: FieldValue.serverTimestamp(),
     });
