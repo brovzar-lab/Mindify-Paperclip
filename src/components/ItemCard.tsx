@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { RectButton, Swipeable } from 'react-native-gesture-handler';
 import {
@@ -25,13 +25,6 @@ const TYPE_ICON: Record<ItemDoc['type'], string> = {
   project: '◇',
 };
 
-/**
- * One row in The Brain. Tap → detail screen. Long-press → mark complete.
- * Swipe right → snooze (advance bucket today→tomorrow→someday).
- *
- * Firestore rules only permit the client to mutate completedAt and bucket
- * on items it owns; both interactions match.
- */
 export function ItemCard({
   item,
   onPress,
@@ -40,17 +33,31 @@ export function ItemCard({
   onPress?: () => void;
 }) {
   const swipeRef = useRef<Swipeable>(null);
+  const [optimisticBucket, setOptimisticBucket] = useState<Bucket | null>(null);
+  const [completing, setCompleting] = useState(false);
+
+  const displayBucket = optimisticBucket ?? item.bucket;
 
   async function handleComplete() {
-    await updateDoc(doc(db, 'items', item.id), {
-      completedAt: serverTimestamp(),
-    });
+    setCompleting(true);
+    try {
+      await updateDoc(doc(db, 'items', item.id), {
+        completedAt: serverTimestamp(),
+      });
+    } catch {
+      setCompleting(false);
+    }
   }
 
   async function handleSnooze() {
-    const next = NEXT_BUCKET[item.bucket];
+    const next = NEXT_BUCKET[displayBucket];
     if (next) {
-      await updateDoc(doc(db, 'items', item.id), { bucket: next });
+      setOptimisticBucket(next);
+      try {
+        await updateDoc(doc(db, 'items', item.id), { bucket: next });
+      } catch {
+        setOptimisticBucket(null);
+      }
     }
     swipeRef.current?.close();
   }
@@ -62,7 +69,7 @@ export function ItemCard({
       inputRange: [0, 1],
       outputRange: [0.4, 1],
     });
-    const next = NEXT_BUCKET[item.bucket];
+    const next = NEXT_BUCKET[displayBucket];
     return (
       <RectButton style={styles.snoozeAction} onPress={handleSnooze}>
         <Animated.Text style={[styles.snoozeText, { opacity }]}>
@@ -81,12 +88,12 @@ export function ItemCard({
       <Pressable
         onPress={onPress}
         onLongPress={handleComplete}
-        style={styles.card}
+        style={[styles.card, completing && styles.cardCompleting]}
       >
         <View style={styles.row}>
           <Text style={styles.typeIcon}>{TYPE_ICON[item.type]}</Text>
           <View style={styles.body}>
-            <Text style={styles.title} numberOfLines={2}>
+            <Text style={[styles.title, completing && styles.titleCompleting]} numberOfLines={2}>
               {item.title}
             </Text>
             <View style={styles.metaRow}>
@@ -120,6 +127,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 1,
   },
+  cardCompleting: { opacity: 0.4 },
   row: {
     flexDirection: 'row',
     gap: theme.spacing.md,
@@ -137,6 +145,10 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontWeight: theme.fontWeight.medium,
     marginBottom: theme.spacing.sm,
+  },
+  titleCompleting: {
+    textDecorationLine: 'line-through' as const,
+    color: theme.colors.textSubtle,
   },
   metaRow: { flexDirection: 'row', alignItems: 'center' },
   spacer: { flex: 1 },

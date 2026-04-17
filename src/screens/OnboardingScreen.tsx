@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { requestRecordingPermissionsAsync } from 'expo-audio';
@@ -48,10 +48,14 @@ export function OnboardingScreen() {
 
       <View style={styles.actions}>
         {denied && (
-          <Text style={styles.deniedText}>
-            Microphone access is required. Open Settings → Mindify →
-            Microphone to enable it, then try again.
-          </Text>
+          <View>
+            <Text style={styles.deniedText}>
+              Microphone access is required to capture your thoughts.
+            </Text>
+            <Pressable onPress={() => Linking.openSettings()} hitSlop={8}>
+              <Text style={styles.settingsLink}>Open Settings</Text>
+            </Pressable>
+          </View>
         )}
         <Pressable
           style={[styles.startButton, requesting && styles.startButtonDisabled]}
@@ -130,8 +134,16 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.sm,
     color: theme.colors.record,
     textAlign: 'center',
-    marginBottom: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
     paddingHorizontal: theme.spacing.md,
+  },
+  settingsLink: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.accent,
+    textAlign: 'center',
+    fontWeight: theme.fontWeight.semibold,
+    marginBottom: theme.spacing.md,
+    textDecorationLine: 'underline',
   },
   startButton: {
     backgroundColor: theme.colors.text,

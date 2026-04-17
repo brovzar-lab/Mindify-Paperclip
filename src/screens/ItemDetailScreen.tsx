@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import {
@@ -23,19 +24,27 @@ export function ItemDetailScreen({ route }: ScreenProps<'ItemDetail'>) {
   const { itemId } = route.params;
   const nav = useNavigation();
   const { item, loading } = useItem(itemId);
+  const [optimisticBucket, setOptimisticBucket] = useState<Bucket | null>(null);
+  const [optimisticComplete, setOptimisticComplete] = useState(false);
 
   if (loading || !item) {
     return <Loading message={loading ? 'Loading...' : 'Item not found.'} />;
   }
 
-  const completed = !!item.completedAt;
+  const completed = optimisticComplete || !!item.completedAt;
+  const displayBucket = optimisticBucket ?? item.bucket;
 
   async function handleComplete() {
     if (!item || completed) return;
-    await updateDoc(doc(db, 'items', item.id), {
-      completedAt: serverTimestamp(),
-    });
-    nav.goBack();
+    setOptimisticComplete(true);
+    try {
+      await updateDoc(doc(db, 'items', item.id), {
+        completedAt: serverTimestamp(),
+      });
+      nav.goBack();
+    } catch {
+      setOptimisticComplete(false);
+    }
   }
 
   async function handleDelete() {
@@ -45,8 +54,13 @@ export function ItemDetailScreen({ route }: ScreenProps<'ItemDetail'>) {
   }
 
   async function handleBucketChange(bucket: Bucket) {
-    if (!item || item.bucket === bucket) return;
-    await updateDoc(doc(db, 'items', item.id), { bucket });
+    if (!item || displayBucket === bucket) return;
+    setOptimisticBucket(bucket);
+    try {
+      await updateDoc(doc(db, 'items', item.id), { bucket });
+    } catch {
+      setOptimisticBucket(null);
+    }
   }
 
   return (
@@ -80,13 +94,13 @@ export function ItemDetailScreen({ route }: ScreenProps<'ItemDetail'>) {
               onPress={() => handleBucketChange(b)}
               style={[
                 styles.bucketChip,
-                item.bucket === b && styles.bucketChipActive,
+                displayBucket === b && styles.bucketChipActive,
               ]}
             >
               <Text
                 style={[
                   styles.bucketChipText,
-                  item.bucket === b && styles.bucketChipTextActive,
+                  displayBucket === b && styles.bucketChipTextActive,
                 ]}
               >
                 {b}

@@ -44,7 +44,17 @@ export function HomeScreen() {
 
       <View style={styles.center}>
         {(recording.isRecording || recording.isUploading) && (
-          <Text style={styles.timer}>{formatElapsed(recording.elapsedMs)}</Text>
+          <Text style={[
+            styles.timer,
+            recording.elapsedMs >= 120_000 && styles.timerWarning,
+          ]}>
+            {formatElapsed(recording.elapsedMs)}
+          </Text>
+        )}
+        {recording.isRecording && recording.elapsedMs >= 120_000 && (
+          <Text style={styles.durationWarning}>
+            Long recordings may take longer to process
+          </Text>
         )}
         {recording.isRecording && (
           <View style={styles.waveformWrap}>
@@ -135,7 +145,13 @@ const styles = StyleSheet.create({
     fontWeight: theme.fontWeight.regular,
     letterSpacing: 1,
     fontVariant: ['tabular-nums'],
-    marginBottom: theme.spacing.lg,
+    marginBottom: theme.spacing.sm,
+  },
+  timerWarning: { color: theme.colors.urgencyHigh },
+  durationWarning: {
+    fontSize: theme.fontSize.xs,
+    color: theme.colors.urgencyHigh,
+    marginBottom: theme.spacing.sm,
   },
   waveformWrap: { marginBottom: theme.spacing.md },
   error: {
