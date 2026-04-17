@@ -6,7 +6,7 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
 import type { RecordingDoc } from '@/types/models';
 
 export interface RecentRecordingState {
@@ -37,6 +37,8 @@ export function useRecentRecording(
       setState(INITIAL);
       return;
     }
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
 
     setState({ recording: null, processing: true, itemCount: 0 });
     const unsubRecording = onSnapshot(
@@ -58,6 +60,7 @@ export function useRecentRecording(
     const unsubItems = onSnapshot(
       query(
         collection(db, 'items'),
+        where('userId', '==', userId),
         where('recordingId', '==', recordingId),
       ),
       (snap) => setState((s) => ({ ...s, itemCount: snap.size })),
