@@ -41,21 +41,33 @@ export function useRecentRecording(
     if (!userId) return;
 
     setState({ recording: null, processing: true, itemCount: 0 });
-    const unsubRecording = onSnapshot(
-      doc(db, 'recordings', recordingId),
-      (snap) => {
-        if (!snap.exists()) {
-          setState((s) => ({ ...s, recording: null, processing: true }));
-          return;
-        }
-        const data = snap.data() as Omit<RecordingDoc, 'id'>;
-        setState((s) => ({
-          ...s,
-          recording: { id: snap.id, ...data },
-          processing: !data.processedAt,
-        }));
-      },
-    );
+
+    let unsubRecording: (() => void) | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function listenToRecording() {
+      unsubRecording = onSnapshot(
+        doc(db, 'recordings', recordingId!),
+        (snap) => {
+          if (!snap.exists()) {
+            setState((s) => ({ ...s, recording: null, processing: true }));
+            return;
+          }
+          const data = snap.data() as Omit<RecordingDoc, 'id'>;
+          setState((s) => ({
+            ...s,
+            recording: { id: snap.id, ...data },
+            processing: !data.processedAt,
+          }));
+        },
+        () => {
+          // permission-denied when doc doesn't exist yet; retry after the
+          // Cloud Function has had time to create it.
+          retryTimer = setTimeout(listenToRecording, 3000);
+        },
+      );
+    }
+    listenToRecording();
 
     const unsubItems = onSnapshot(
       query(
@@ -64,11 +76,13 @@ export function useRecentRecording(
         where('recordingId', '==', recordingId),
       ),
       (snap) => setState((s) => ({ ...s, itemCount: snap.size })),
+      () => {},
     );
 
     return () => {
-      unsubRecording();
+      unsubRecording?.();
       unsubItems();
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [recordingId]);
 
