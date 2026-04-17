@@ -30,6 +30,7 @@ const AUDIO_PATH_PATTERN = /^audio\/([^/]+)\/([^/]+)\.(m4a|mp3|wav|webm|ogg)$/;
  */
 export const processRecording = onObjectFinalized(
   {
+    region: 'us-west1',
     secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY],
     memory: '512MiB',
     timeoutSeconds: 60,
