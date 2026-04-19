@@ -15,6 +15,8 @@ service cloud.firestore {
     }
 
     // Users own their profile doc; nobody else can read or write it.
+    // The `entities` map is written here when the user approves an
+    // EntitySuggestionDoc.
     match /users/{userId} {
       allow read, write: if isOwner(userId);
     }
@@ -26,8 +28,9 @@ service cloud.firestore {
     }
 
     // Items: Cloud Functions create; users can read their own, mark them
-    // complete (set completedAt) or snooze (change bucket), and delete.
-    // Classification fields are immutable from the client.
+    // complete (set completedAt), snooze (change bucket), assign a topic
+    // (set topicId after approving a suggestion), and delete. Other
+    // classification fields are immutable from the client.
     match /items/{itemId} {
       allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
       allow create: if false;
@@ -35,7 +38,7 @@ service cloud.firestore {
       allow update: if isSignedIn()
         && resource.data.userId == request.auth.uid
         && request.resource.data.userId == resource.data.userId
-        && onlyChangedFields(['completedAt', 'bucket']);
+        && onlyChangedFields(['completedAt', 'bucket', 'topicId']);
     }
 
     // Groups: Cloud Functions create; users can read their own, rename, or delete.
@@ -46,6 +49,41 @@ service cloud.firestore {
       allow update: if isSignedIn()
         && resource.data.userId == request.auth.uid
         && onlyChangedFields(['title']);
+    }
+
+    // Topics: users create these client-side when approving a suggestion,
+    // and can rename or delete their own. Cloud Functions also update
+    // itemIds / itemCount / lastUpdatedAt on topicMatch writes.
+    match /topics/{topicId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId;
+    }
+
+    // TopicSuggestions: Cloud Functions create pending ones; users read and
+    // flip status (approve/reject) on their own suggestions.
+    match /topicSuggestions/{suggestionId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if false;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && onlyChangedFields(['status']);
+    }
+
+    // EntitySuggestions: same pattern as topic suggestions. The user also
+    // edits the persisted entity through users/{uid}.entities on approval.
+    match /entitySuggestions/{suggestionId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if false;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && onlyChangedFields(['status', 'relationship']);
     }
 
     // Per-recording cost ledger written by processRecording. Clients never

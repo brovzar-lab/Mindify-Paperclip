@@ -3,6 +3,7 @@ import { useNavigation } from '@react-navigation/native';
 import { ScreenContainer } from '@/components/ScreenContainer';
 import { RecordButton } from '@/components/RecordButton';
 import { RecordingWaveform } from '@/components/RecordingWaveform';
+import { NextActionCard } from '@/components/NextActionCard';
 import { useRecording } from '@/hooks/useRecording';
 import {
   useRecentRecording,
@@ -62,6 +63,7 @@ export function HomeScreen() {
         )}
       </View>
 
+      <NextActionCard />
       <RecentStatus
         recordingId={lastRecordingId}
         recent={recent}

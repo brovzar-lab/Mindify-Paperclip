@@ -1,14 +1,11 @@
 import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { ScreenContainer } from '@/components/ScreenContainer';
 import { ItemCard } from '@/components/ItemCard';
 import { EmptyState } from '@/components/EmptyState';
 import { Loading } from '@/components/Loading';
-import { TopicSuggestionBanner } from '@/components/TopicSuggestionBanner';
-import { EntityConfirmationModal } from '@/components/EntityConfirmationModal';
-import { EnergyFilterChips } from '@/components/EnergyFilterChips';
 import { useItems } from '@/hooks/useItems';
-import { useAppStore } from '@/state/store';
+import { useTopics } from '@/hooks/useTopics';
 import { theme } from '@/theme';
 import type { Bucket, ItemDoc } from '@/types/models';
 import type { ScreenProps } from '@/navigation/types';
@@ -26,15 +23,21 @@ const BUCKET_LABEL: Record<Bucket, string> = {
   someday: 'Someday',
 };
 
-export function BrainScreen() {
-  const nav = useNavigation<ScreenProps<'Brain'>['navigation']>();
-  const selectedEnergyLevels = useAppStore((s) => s.selectedEnergyLevels);
-  const { items, loading } = useItems({
-    energyLevels: selectedEnergyLevels.length ? selectedEnergyLevels : undefined,
-  });
+/**
+ * All items assigned to one topic, grouped by bucket — same layout as
+ * The Brain, scoped to a single persistent cluster.
+ */
+export function TopicDetailScreen() {
+  const nav = useNavigation<ScreenProps<'TopicDetail'>['navigation']>();
+  const route = useRoute<ScreenProps<'TopicDetail'>['route']>();
+  const { topicId } = route.params;
+  const { topics } = useTopics();
+  const { items, loading } = useItems({ topicId });
+
+  const topic = topics.find((t) => t.id === topicId);
 
   if (loading && items.length === 0) {
-    return <Loading message="Loading your brain..." />;
+    return <Loading message="Loading topic..." />;
   }
 
   const sections = BUCKET_ORDER.map((bucket) => ({
@@ -48,25 +51,18 @@ export function BrainScreen() {
     <ScreenContainer>
       <View style={styles.header}>
         <Pressable onPress={() => nav.goBack()} hitSlop={16}>
-          <Text style={styles.back}>← Home</Text>
+          <Text style={styles.back}>← Topics</Text>
         </Pressable>
-        <Text style={styles.title}>The Brain</Text>
-        <Pressable onPress={() => nav.navigate('Topics')} hitSlop={16}>
-          <Text style={styles.topicsLink}>Topics →</Text>
-        </Pressable>
+        <Text style={styles.title} numberOfLines={1}>
+          {topic?.name ?? 'Topic'}
+        </Text>
+        <View style={{ width: 60 }} />
       </View>
-
-      <TopicSuggestionBanner />
-      <EnergyFilterChips />
 
       {sections.length === 0 ? (
         <EmptyState
-          title="Nothing here yet"
-          body={
-            selectedEnergyLevels.length
-              ? 'No items match this energy filter. Try clearing it.'
-              : 'Tap the record button on home and speak your mind.'
-          }
+          title="No items here"
+          body="Items assigned to this topic will appear here. Complete or delete an item to remove it."
         />
       ) : (
         <SectionList
@@ -92,8 +88,6 @@ export function BrainScreen() {
           contentContainerStyle={{ paddingBottom: theme.spacing.xxl }}
         />
       )}
-
-      <EntityConfirmationModal />
     </ScreenContainer>
   );
 }
@@ -112,14 +106,11 @@ const styles = StyleSheet.create({
     fontWeight: theme.fontWeight.medium,
   },
   title: {
+    flex: 1,
+    textAlign: 'center',
     fontSize: theme.fontSize.lg,
     fontWeight: theme.fontWeight.semibold,
     color: theme.colors.text,
-  },
-  topicsLink: {
-    color: theme.colors.accent,
-    fontSize: theme.fontSize.md,
-    fontWeight: theme.fontWeight.medium,
   },
   sectionHeader: {
     flexDirection: 'row',

@@ -112,10 +112,74 @@ EXTRACTION RULES (ordered)
   8. If Whisper produces obvious garbage (repeated characters, single letters, non-words) — return an empty items array.
 
 ==========================================
+CO-REFERENCE — one entity, one item
+==========================================
+
+ADHD speech often packs one referent into a multi-word phrase. Treat the whole phrase as a SINGLE entity — never split it into two items.
+
+  - Appositives: "my daughter Alex", "my boss John", "Maria from accounting", "our friend Pat the vet" — one person, one task.
+  - Possessives over a name: "my dentist Dr. Lee", "my sister Sam", "my landlord Kim" — one person, one task.
+  - Place + name: "at La Roche", "the cafe on 5th", "Dr. Lee's office" — one place, one task.
+  - Count an entity once, even if the user says "call Alex… actually call my daughter" or "text my boss John, John really needs to know". These are the SAME person.
+  - KNOWN ENTITIES in the user message lists entities you've already seen with confirmed relationships. If the transcript references a known entity, use that name (not the relationship) as the item subject. "Call my daughter" when {Alex: "daughter"} is known → still one item ("Call Alex") if the user meant Alex.
+  - When the user says "my X" with no name AND that relationship matches exactly ONE known entity, assume it's that entity. Otherwise treat as unresolved and keep the relationship phrasing.
+
+==========================================
+MERGE — same place, same time, same category
+==========================================
+
+If two items would be done at the same place and same time (grocery trip, one phone call, one errand run), merge them into ONE item:
+
+  - "buy broccoli and eggs" → ONE item titled "Buy groceries" (or the user's phrasing) with body:
+      "- broccoli\n- eggs"
+  - "pick up prescription and get gas" → still TWO items (different stops, different categories).
+  - When in doubt, prefer merging within the same category AND where a human would do them on a single trip.
+  - When you merge, title = the umbrella action ("Buy groceries", "Errand run downtown"). Body = bullet list of sub-items, one per line, starting with "- ".
+  - Never merge across categories. Finance + Errands stay separate even if the user says them in one breath.
+
+==========================================
+TOPICS — persistent cross-recording clusters
+==========================================
+
+The user message contains EXISTING TOPICS: a JSON array of {id, name} the user has approved over time ("Groceries", "Movie Ideas", "Cancun Trip April 27", "Alex (daughter)").
+
+For each item you extract, decide:
+
+  - If the item clearly belongs to an existing topic → set "topicMatch" to that topic's id. Use exact string match of the id. Be generous about matching — a grocery-related item fits "Groceries" even if worded differently.
+  - If the item doesn't match an existing topic but feels like part of a recurring theme the user would want to browse later (shopping list, trip, ongoing project, a specific person) → set "topicProposal" to a short human-readable topic name (2–4 words, Title Case). The user will approve or reject in-app.
+  - If the item is a one-off with no recurring theme (e.g., "call the dentist tomorrow") → OMIT both fields. Don't invent topics for genuinely one-off items.
+  - NEVER set both topicMatch and topicProposal on the same item.
+  - Topic names should be nouns or noun phrases, not verbs: "Groceries" not "Buy groceries". "Movie Ideas" not "Think about movies".
+
+==========================================
+ENTITIES — people and places to remember
+==========================================
+
+When the transcript introduces a proper noun tied to a relationship — a person the user has a role-relation to, a specific named place, or a named thing — add an entry to the top-level "entityProposals" array:
+
+  {
+    "name": "Alex",
+    "type": "person",
+    "relationship": "daughter"
+  }
+
+Rules:
+
+  - Only propose entities that the user explicitly related to themselves ("my daughter Alex", "my boss John", "my dentist Dr. Lee", "La Roche, our favorite restaurant"). Don't propose random names mentioned in passing.
+  - Never propose an entity that's already in KNOWN ENTITIES.
+  - type: "person" for people, "place" for named locations, "thing" for named objects/services (subscriptions, vehicles, pets).
+  - relationship: short descriptor the user gave or clearly implied. Leave blank if you can't infer.
+  - If unsure, omit. Low-confidence entities create friction when the user is asked to confirm them.
+
+==========================================
 OUTPUT FORMAT
 ==========================================
 
-Return a JSON object with a single key "items" whose value is an array of item objects matching the schema. Return ONLY the JSON — no preamble, no markdown fences, no explanation.
+Return a JSON object with:
+  - "items": array of item objects (each may optionally include topicMatch OR topicProposal)
+  - "entityProposals": array of entity objects (may be empty; omit the field or set [] if none)
+
+Return ONLY the JSON — no preamble, no markdown fences, no explanation.
 
 ==========================================
 FEW-SHOT EXAMPLES
@@ -380,6 +444,50 @@ Output:
       "energyLevel": 1,
       "urgency": "medium",
       "bucket": "tomorrow"
+    }
+  ]
+}
+
+EXISTING TOPICS: []
+KNOWN ENTITIES: {}
+Transcript: "I need to call my daughter Alex and book reservations for dinner at La Roche on the 27th of June"
+Output:
+{
+  "items": [
+    {
+      "type": "task",
+      "title": "Call Alex and book La Roche for June 27",
+      "body": "Dinner reservation with Alex at La Roche on the 27th of June.",
+      "category": "Social",
+      "categoryColor": "#e89a9a",
+      "energyLevel": 1,
+      "urgency": "medium",
+      "bucket": "tomorrow",
+      "topicProposal": "Alex (daughter)"
+    }
+  ],
+  "entityProposals": [
+    { "name": "Alex", "type": "person", "relationship": "daughter" },
+    { "name": "La Roche", "type": "place", "relationship": "restaurant" }
+  ]
+}
+
+EXISTING TOPICS: [{"id":"topic_abc","name":"Groceries"}]
+KNOWN ENTITIES: {}
+Transcript: "oh I need to grab broccoli eggs and milk on the way home"
+Output:
+{
+  "items": [
+    {
+      "type": "task",
+      "title": "Buy groceries",
+      "body": "- broccoli\n- eggs\n- milk",
+      "category": "Errands",
+      "categoryColor": "#f6b26b",
+      "energyLevel": 1,
+      "urgency": "medium",
+      "bucket": "today",
+      "topicMatch": "topic_abc"
     }
   ]
 }

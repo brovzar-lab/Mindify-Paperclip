@@ -12,6 +12,7 @@ import { classifyTranscript } from './claude';
 import { proposeGroups } from './grouping';
 import { checkAndIncrement, MAX_RECORDINGS_PER_HOUR } from './rateLimiter';
 import { logRecordingCost } from './metrics';
+import { fetchClassificationContext } from './context';
 
 // Storage objects land at audio/{userId}/{recordingId}.{ext}. The extension
 // is captured but discarded so the recordingId stays clean for use as a
@@ -22,11 +23,12 @@ const AUDIO_PATH_PATTERN = /^audio\/([^/]+)\/([^/]+)\.(m4a|mp3|wav|webm|ogg)$/;
 /**
  * Storage-triggered pipeline:
  *   Storage upload → rate-limit gate → Whisper transcription →
- *   Claude classification → smart grouping → atomic Firestore write
- *   (recording, items, groups) → cost log.
+ *   context fetch (topics/entities/recent) → Claude classification →
+ *   smart grouping → atomic Firestore write (recording, items, groups,
+ *   topic updates, topicSuggestions, entitySuggestions) → cost log.
  *
  * The final Firestore write is a single batch so the client's real-time
- * listener sees all items (and their group assignments) appear together.
+ * listener sees all items (and their group/topic assignments) appear together.
  */
 export const processRecording = onObjectFinalized(
   {
@@ -79,11 +81,18 @@ export const processRecording = onObjectFinalized(
     const bucket = getStorage().bucket(event.data.bucket);
     const [audioBytes] = await bucket.file(objectName).download();
 
-    // 2. Transcribe via Whisper.
-    const transcript = await transcribeAudio(audioBytes, objectName);
+    // 2. Transcribe via Whisper and (in parallel) fetch per-user context.
+    //    Context is safe to fetch before classification — it only reads
+    //    collections the user owns and doesn't depend on the transcript.
+    const [transcript, context] = await Promise.all([
+      transcribeAudio(audioBytes, objectName),
+      fetchClassificationContext(userId),
+    ]);
     logger.info('Transcribed', {
       recordingId,
       length: transcript.length,
+      topicCount: context.existingTopics.length,
+      entityCount: Object.keys(context.knownEntities).length,
     });
 
     // Persist the transcript + recording metadata immediately so the client
@@ -106,24 +115,33 @@ export const processRecording = onObjectFinalized(
       return;
     }
 
-    // 3. Classify via Claude.
-    const { items, usage } = await classifyTranscript(transcript);
+    // 3. Classify via Claude with per-user context.
+    const { items, entityProposals, usage } = await classifyTranscript(
+      transcript,
+      context,
+    );
     logger.info('Classified', {
       recordingId,
       itemCount: items.length,
+      entityProposalCount: entityProposals.length,
       usage,
     });
 
-    // 4. Propose groups within this recording's items.
+    // 4. Propose groups within this recording's items (intra-recording
+    //    clustering still runs alongside cross-recording topics).
     const groups = proposeGroups(items);
 
+    // Validate that every topicMatch the model returned actually points at
+    // a known topic id. Anything else is treated as a proposal for the
+    // user's preferred topic-creation flow.
+    const validTopicIds = new Set(context.existingTopics.map((t) => t.id));
+
     // 5. Single atomic batch: create group docs first (so we know their
-    //    ids), then item docs with their groupId stamped, then mark the
-    //    recording processed.
+    //    ids), then item docs with groupId + topicId stamped, then
+    //    topic-membership updates, topic suggestions, entity suggestions,
+    //    and finally mark the recording processed.
     const batch = firestore.batch();
-    const itemRefs = items.map(() =>
-      firestore.collection('items').doc(),
-    );
+    const itemRefs = items.map(() => firestore.collection('items').doc());
     const itemGroupId = new Map<number, string>();
 
     for (const group of groups) {
@@ -140,7 +158,30 @@ export const processRecording = onObjectFinalized(
       }
     }
 
+    // Aggregate item ids per topic for a single arrayUnion update per topic.
+    const topicAdditions = new Map<string, string[]>();
+    // Aggregate proposal by name so multiple items proposing the same topic
+    // share one TopicSuggestionDoc.
+    const topicProposalsByName = new Map<string, string[]>();
+
     items.forEach((item, i) => {
+      const itemId = itemRefs[i].id;
+      let topicId: string | null = null;
+
+      if (item.topicMatch && validTopicIds.has(item.topicMatch)) {
+        topicId = item.topicMatch;
+        const bucket = topicAdditions.get(topicId) ?? [];
+        bucket.push(itemId);
+        topicAdditions.set(topicId, bucket);
+      } else if (item.topicProposal) {
+        const trimmed = item.topicProposal.trim();
+        if (trimmed) {
+          const bucket = topicProposalsByName.get(trimmed) ?? [];
+          bucket.push(itemId);
+          topicProposalsByName.set(trimmed, bucket);
+        }
+      }
+
       batch.set(itemRefs[i], {
         userId,
         recordingId,
@@ -153,10 +194,55 @@ export const processRecording = onObjectFinalized(
         urgency: item.urgency,
         bucket: item.bucket,
         groupId: itemGroupId.get(i) ?? null,
+        topicId,
         createdAt: FieldValue.serverTimestamp(),
         completedAt: null,
       });
     });
+
+    // Update each matched topic doc: append the new item ids and bump the
+    // counter / lastUpdatedAt so Topics sorts by recency.
+    for (const [topicId, newItemIds] of topicAdditions.entries()) {
+      const topicRef = firestore.collection('topics').doc(topicId);
+      batch.update(topicRef, {
+        itemIds: FieldValue.arrayUnion(...newItemIds),
+        itemCount: FieldValue.increment(newItemIds.length),
+        lastUpdatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    // Write topic suggestions (one per unique proposed name). User must
+    // approve before a TopicDoc gets created.
+    for (const [name, proposedItemIds] of topicProposalsByName.entries()) {
+      const suggestionRef = firestore.collection('topicSuggestions').doc();
+      batch.set(suggestionRef, {
+        userId,
+        name,
+        proposedItemIds,
+        sourceRecordingId: recordingId,
+        status: 'pending',
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    // Write entity suggestions. The client will surface these via local
+    // notification and the EntityConfirmationModal.
+    const knownEntityNames = new Set(Object.keys(context.knownEntities));
+    for (const proposal of entityProposals) {
+      const name = proposal.name?.trim();
+      if (!name) continue;
+      if (knownEntityNames.has(name)) continue; // already confirmed
+      const suggestionRef = firestore.collection('entitySuggestions').doc();
+      batch.set(suggestionRef, {
+        userId,
+        name,
+        type: proposal.type,
+        relationship: proposal.relationship ?? null,
+        sourceRecordingId: recordingId,
+        status: 'pending',
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
 
     batch.update(recordingRef, {
       processedAt: FieldValue.serverTimestamp(),
@@ -173,6 +259,9 @@ export const processRecording = onObjectFinalized(
       overBudget,
       itemCount: items.length,
       groupCount: groups.length,
+      topicMatchCount: topicAdditions.size,
+      topicProposalCount: topicProposalsByName.size,
+      entitySuggestionCount: entityProposals.length,
     });
 
     // 6. Log per-recording cost to Firestore. Non-fatal if it fails —

@@ -1,4 +1,5 @@
 import 'react-native-gesture-handler';
+import { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import {
@@ -8,6 +9,10 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { AuthGate } from '@/components/AuthGate';
 import { RootStack } from '@/navigation/RootStack';
+import {
+  configureNotificationHandler,
+  installNotificationResponseListener,
+} from '@/lib/notifications';
 import { theme } from '@/theme';
 
 const navTheme = {
@@ -24,6 +29,12 @@ const navTheme = {
 };
 
 export default function App() {
+  useEffect(() => {
+    configureNotificationHandler();
+    const unsub = installNotificationResponseListener();
+    return unsub;
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>

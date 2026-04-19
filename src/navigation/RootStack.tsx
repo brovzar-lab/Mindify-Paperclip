@@ -6,6 +6,8 @@ import { HomeScreen } from '@/screens/HomeScreen';
 import { BrainScreen } from '@/screens/BrainScreen';
 import { ItemDetailScreen } from '@/screens/ItemDetailScreen';
 import { OnboardingScreen } from '@/screens/OnboardingScreen';
+import { TopicsScreen } from '@/screens/TopicsScreen';
+import { TopicDetailScreen } from '@/screens/TopicDetailScreen';
 import type { RootStackParamList } from './types';
 
 const ONBOARDING_KEY = 'mindify.onboardedAt';
@@ -40,6 +42,12 @@ export function RootStack() {
       <Stack.Screen name="Onboarding" component={OnboardingScreen} />
       <Stack.Screen name="Home" component={HomeScreen} />
       <Stack.Screen name="Brain" component={BrainScreen} />
+      <Stack.Screen name="Topics" component={TopicsScreen} />
+      <Stack.Screen
+        name="TopicDetail"
+        component={TopicDetailScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
       <Stack.Screen
         name="ItemDetail"
         component={ItemDetailScreen}

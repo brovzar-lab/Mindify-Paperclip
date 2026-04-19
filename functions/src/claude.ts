@@ -1,7 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ANTHROPIC_API_KEY, CLAUDE_MODEL } from './config';
 import { CLASSIFICATION_SYSTEM_PROMPT } from './prompts/classification';
-import type { ClassifiedItem } from './types';
+import type {
+  ClassifiedItem,
+  ClassificationContext,
+  EntityProposal,
+} from './types';
 
 // Prompt lives in ./prompts/classification.ts so it can be diffed, token-
 // counted, and grown past Haiku 4.5's 4096-token minimum cacheable prefix
@@ -24,6 +28,13 @@ const ITEM_JSON_SCHEMA = {
           energyLevel: { type: 'integer', enum: [1, 2, 3] },
           urgency: { type: 'string', enum: ['high', 'medium', 'low'] },
           bucket: { type: 'string', enum: ['today', 'tomorrow', 'someday'] },
+          // Cross-recording clustering. Mutually exclusive: topicMatch
+          // references an existing TopicDoc id (from the context we pass
+          // in the user message); topicProposal names a new topic to be
+          // created after user approval. Both optional — items without
+          // either stay outside the topic layer.
+          topicMatch: { type: 'string' },
+          topicProposal: { type: 'string' },
         },
         required: [
           'type',
@@ -37,6 +48,22 @@ const ITEM_JSON_SCHEMA = {
         additionalProperties: false,
       },
     },
+    // Entity proposals are emitted at the response envelope level (not
+    // per-item) because a single transcript can surface one entity
+    // ("my daughter Alex") that's referenced by multiple items.
+    entityProposals: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          type: { type: 'string', enum: ['person', 'place', 'thing'] },
+          relationship: { type: 'string' },
+        },
+        required: ['name', 'type'],
+        additionalProperties: false,
+      },
+    },
   },
   required: ['items'],
   additionalProperties: false,
@@ -44,6 +71,7 @@ const ITEM_JSON_SCHEMA = {
 
 export interface ClassifyResult {
   items: ClassifiedItem[];
+  entityProposals: EntityProposal[];
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -66,24 +94,64 @@ function defaultClient(): Anthropic {
 }
 
 /**
+ * Serialize the per-user context block that precedes the transcript in the
+ * user message. Stable JSON ordering keeps this deterministic so prompt
+ * caches further upstream (Whisper temp=0 → same transcript → same context)
+ * stay warm across repeated recordings.
+ */
+function formatContext(context: ClassificationContext): string {
+  const topics = context.existingTopics.length
+    ? JSON.stringify(
+        context.existingTopics.map((t) => ({ id: t.id, name: t.name })),
+      )
+    : '[]';
+  const entities = Object.keys(context.knownEntities).length
+    ? JSON.stringify(
+        Object.fromEntries(
+          Object.entries(context.knownEntities).map(([name, e]) => [
+            name,
+            e.relationship ?? e.type,
+          ]),
+        ),
+      )
+    : '{}';
+  const recent = context.recentItemTitles.length
+    ? JSON.stringify(
+        context.recentItemTitles.map((r) => `${r.title} [${r.category}]`),
+      )
+    : '[]';
+  return [
+    `EXISTING TOPICS: ${topics}`,
+    `KNOWN ENTITIES: ${entities}`,
+    `RECENT ITEMS: ${recent}`,
+  ].join('\n');
+}
+
+/**
  * Classify a transcript into structured items via Claude Haiku 4.5.
  *
  * - Pinned to the dated snapshot (see config.ts) to avoid alias drift.
  * - System prompt carries a `cache_control: ephemeral` breakpoint so the
  *   (stable) prompt + few-shot block cache across requests.
+ * - Per-user context (topics, entities, recent items) rides in the user
+ *   message so it stays out of the cached prefix.
  * - Uses `output_config.format` structured outputs so we get guaranteed
  *   valid JSON matching the schema; we still JSON.parse the first text
  *   block because `messages.create` returns the raw text.
  *
  * @param transcript        The Whisper output to classify.
+ * @param context           Per-user topics/entities/recent items.
  * @param anthropicClient   Optional override; omit in production so the
  *                          function reads its secret from Firebase.
  */
 export async function classifyTranscript(
   transcript: string,
+  context: ClassificationContext,
   anthropicClient?: Anthropic,
 ): Promise<ClassifyResult> {
   const anthropic = anthropicClient ?? defaultClient();
+  const userMessage = `${formatContext(context)}\n\nTranscript: "${transcript.replace(/"/g, '\\"')}"`;
+
   const response = await anthropic.messages.create({
     model: CLAUDE_MODEL,
     max_tokens: 4096,
@@ -103,7 +171,7 @@ export async function classifyTranscript(
     messages: [
       {
         role: 'user',
-        content: `Transcript: "${transcript.replace(/"/g, '\\"')}"`,
+        content: userMessage,
       },
     ],
   });
@@ -115,7 +183,7 @@ export async function classifyTranscript(
     throw new Error('Claude response missing text block');
   }
 
-  let parsed: { items: ClassifiedItem[] };
+  let parsed: { items: ClassifiedItem[]; entityProposals?: EntityProposal[] };
   try {
     parsed = JSON.parse(textBlock.text);
   } catch (err) {
@@ -128,8 +196,24 @@ export async function classifyTranscript(
     throw new Error('Claude output missing items array');
   }
 
+  // Guard: enforce topicMatch / topicProposal mutual exclusion client-side
+  // in case the schema's `oneOf` isn't honored by the structured-output
+  // implementation (some JSON Schema features are partially supported).
+  const items = parsed.items.map((item) => {
+    if (item.topicMatch && item.topicProposal) {
+      // Match wins — it's the safer, non-destructive path (no new topic
+      // gets proposed unnecessarily).
+      const { topicProposal: _drop, ...rest } = item;
+      return rest;
+    }
+    return item;
+  });
+
   return {
-    items: parsed.items,
+    items,
+    entityProposals: Array.isArray(parsed.entityProposals)
+      ? parsed.entityProposals
+      : [],
     usage: {
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,

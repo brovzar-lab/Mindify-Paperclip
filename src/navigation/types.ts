@@ -5,6 +5,8 @@ export type RootStackParamList = {
   Home: undefined;
   Brain: undefined;
   ItemDetail: { itemId: string };
+  Topics: undefined;
+  TopicDetail: { topicId: string };
 };
 
 export type ScreenProps<T extends keyof RootStackParamList> =

@@ -4,6 +4,7 @@ import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
 import { ScreenContainer } from '@/components/ScreenContainer';
+import { registerForEntityNotifications } from '@/lib/notifications';
 import { theme } from '@/theme';
 import type { ScreenProps } from '@/navigation/types';
 
@@ -23,6 +24,10 @@ export function OnboardingScreen() {
         setDenied(true);
         return;
       }
+      // Notification permission is best-effort: we prompt once here so
+      // entity confirmations can fire in the background, but a refusal
+      // doesn't block onboarding — the modal still works in-app.
+      await registerForEntityNotifications();
       await AsyncStorage.setItem(ONBOARDING_KEY, new Date().toISOString());
       nav.reset({ index: 0, routes: [{ name: 'Home' }] });
     } finally {
