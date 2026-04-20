@@ -32,6 +32,9 @@ const AUDIO_PATH_PATTERN = /^audio\/([^/]+)\/([^/]+)\.(m4a|mp3|wav|webm|ogg)$/;
  */
 export const processRecording = onObjectFinalized(
   {
+    // Must match the Storage bucket's region — Gen2 functions can only
+    // listen to buckets in the same region.
+    region: 'us-west1',
     secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY],
     memory: '512MiB',
     timeoutSeconds: 60,
