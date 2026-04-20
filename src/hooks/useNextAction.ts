@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
   collection,
-  limit,
   onSnapshot,
   orderBy,
   query,
@@ -12,10 +11,14 @@ import type { ItemDoc } from '@/types/models';
 import { useAuth } from './useAuth';
 
 /**
- * The single item the user is most likely to actually do right now:
- * bucket=today, high urgency, not completed, lowest energy first so we
- * surface the fastest win. The ADHD brain does better with "one thing"
- * than "a list".
+ * The single item the user is most likely to do right now. We query only
+ * on userId + bucket='today' + createdAt (reuses the existing items
+ * composite index) and pick the lowest-energy, highest-urgency uncompleted
+ * one client-side — keeps us off a 5-field composite index the SDK would
+ * otherwise demand.
+ *
+ * One round-trip, one index, one result. The ADHD brain does better with
+ * "one thing" than "a list".
  */
 export function useNextAction(): { nextItem: ItemDoc | null; loading: boolean } {
   const user = useAuth();
@@ -33,18 +36,22 @@ export function useNextAction(): { nextItem: ItemDoc | null; loading: boolean } 
       query(
         collection(db, 'items'),
         where('userId', '==', user.uid),
-        where('completedAt', '==', null),
         where('bucket', '==', 'today'),
-        where('urgency', '==', 'high'),
-        orderBy('energyLevel', 'asc'),
         orderBy('createdAt', 'desc'),
-        limit(1),
       ),
       (snap) => {
-        const d = snap.docs[0];
-        setNextItem(
-          d ? { id: d.id, ...(d.data() as Omit<ItemDoc, 'id'>) } : null,
-        );
+        const candidates = snap.docs
+          .map(
+            (d) => ({ id: d.id, ...(d.data() as Omit<ItemDoc, 'id'>) }),
+          )
+          .filter((i) => i.completedAt == null);
+        const urgencyRank = { high: 0, medium: 1, low: 2 } as const;
+        candidates.sort((a, b) => {
+          const u = urgencyRank[a.urgency] - urgencyRank[b.urgency];
+          if (u !== 0) return u;
+          return a.energyLevel - b.energyLevel; // lower energy first
+        });
+        setNextItem(candidates[0] ?? null);
         setLoading(false);
       },
       (err) => {

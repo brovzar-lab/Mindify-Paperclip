@@ -10,6 +10,11 @@ import { scheduleEntityConfirmationNotification } from '@/lib/notifications';
  * fires a local notification so the user gets prompted even if the app
  * is backgrounded.
  *
+ * We query only on userId + createdAt (existing composite index) and
+ * filter by status client-side — there are at most a handful of pending
+ * suggestions at any time, and avoiding a second where-clause keeps us
+ * off the composite-index dependency list.
+ *
  * Notifications dedupe on suggestion id — we track ids we've already
  * notified about in a ref so re-mounting the hook doesn't re-fire.
  */
@@ -33,33 +38,29 @@ export function useEntitySuggestions(): {
       query(
         collection(db, 'entitySuggestions'),
         where('userId', '==', user.uid),
-        where('status', '==', 'pending'),
         orderBy('createdAt', 'desc'),
       ),
       (snap) => {
+        const pending = snap.docs
+          .map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<EntitySuggestionDoc, 'id'>),
+          }))
+          .filter((s) => s.status === 'pending');
         snap.docChanges().forEach((change) => {
           if (change.type !== 'added') return;
           const id = change.doc.id;
           if (notifiedIds.current.has(id)) return;
-          notifiedIds.current.add(id);
           const data = change.doc.data() as Omit<EntitySuggestionDoc, 'id'>;
-          // Fire a local push so the user gets reminded even if they
-          // switched away from the app after recording. The handler is
-          // a no-op if notification permission was not granted.
+          if (data.status !== 'pending') return;
+          notifiedIds.current.add(id);
           scheduleEntityConfirmationNotification({
             suggestionId: id,
             name: data.name,
             relationship: data.relationship ?? undefined,
           });
         });
-        setSuggestions(
-          snap.docs.map(
-            (d) => ({
-              id: d.id,
-              ...(d.data() as Omit<EntitySuggestionDoc, 'id'>),
-            }),
-          ),
-        );
+        setSuggestions(pending);
         setLoading(false);
       },
       (err) => {

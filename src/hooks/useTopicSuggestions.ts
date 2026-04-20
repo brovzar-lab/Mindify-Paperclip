@@ -7,8 +7,10 @@ import { useAuth } from './useAuth';
 /**
  * Pending topic suggestions created by processRecording. The banner in
  * BrainScreen reads this and offers the user an approve / reject choice.
- * Approving creates a TopicDoc and stamps topicId onto the proposed items;
- * rejecting just flips status to 'rejected' so it stops showing.
+ *
+ * Queried on userId + createdAt (existing composite shape) with status
+ * filtered client-side — there are only ever a handful of pending
+ * suggestions so in-memory filtering is cheaper than another index.
  */
 export function useTopicSuggestions(): {
   suggestions: TopicSuggestionDoc[];
@@ -29,17 +31,18 @@ export function useTopicSuggestions(): {
       query(
         collection(db, 'topicSuggestions'),
         where('userId', '==', user.uid),
-        where('status', '==', 'pending'),
         orderBy('createdAt', 'desc'),
       ),
       (snap) => {
         setSuggestions(
-          snap.docs.map(
-            (d) => ({
-              id: d.id,
-              ...(d.data() as Omit<TopicSuggestionDoc, 'id'>),
-            }),
-          ),
+          snap.docs
+            .map(
+              (d) => ({
+                id: d.id,
+                ...(d.data() as Omit<TopicSuggestionDoc, 'id'>),
+              }),
+            )
+            .filter((s) => s.status === 'pending'),
         );
         setLoading(false);
       },
